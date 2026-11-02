@@ -1,0 +1,8 @@
+edge-tts>=7.0,<9
+keyboard>=0.13.5,<1
+uiautomation>=2.0,<3
+pyperclip>=1.9,<2
+sounddevice>=0.5,<1
+miniaudio>=1.61,<2
+numpy>=1.26,<3
+pywin32>=306
