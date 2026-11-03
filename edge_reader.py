@@ -125,8 +125,10 @@ class App:
         except OSError:
             pass
         self.speaker.stop()
-        keyboard.unhook_all_hotkeys()
-        self.root.destroy()
+        try:
+            keyboard.unhook_all_hotkeys()
+        finally:
+            self.root.destroy()
 
     def run(self):
         try:

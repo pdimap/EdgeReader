@@ -40,7 +40,7 @@ class WindowsClipboardTests(unittest.TestCase):
         import win32con
         from unittest.mock import patch
         from edge_reader import App
-        with patch('edge_reader.Speaker') as speaker_class, patch('edge_reader.keyboard.add_hotkey') as register:
+        with patch('edge_reader.Speaker') as speaker_class, patch('edge_reader.keyboard.add_hotkey') as register, patch('edge_reader.keyboard.unhook_all_hotkeys'):
             app = App()
             app.root.withdraw()
             cb.OpenClipboard()
