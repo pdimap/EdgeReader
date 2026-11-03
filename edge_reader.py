@@ -17,7 +17,7 @@ class App:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("EdgeReader 2.0.2")
-        self.root.geometry("490x480")
+        self.root.geometry("490x520")
         self.request_id = 0
         self.selection_lock = threading.Lock()
         self.settings_path = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "EdgeReader" / "settings.json"
@@ -54,6 +54,7 @@ class App:
 
         ttk.Label(frame, text="Пауза: Ctrl+Alt+P     Стоп: Ctrl+Alt+Z", foreground="#666").pack(anchor="w", pady=(13, 5))
         ttk.Label(frame, textvariable=self.status, wraplength=405, foreground="#245A93").pack(anchor="w")
+        ttk.Button(frame, text="Прочитать буфер", command=self.read).pack(anchor="w", pady=4)
         ttk.Button(frame, text="Проверить звук", command=self.test_sound).pack(anchor="w", pady=8)
         ttk.Button(frame, text="Проверить текст в буфере", command=self.diagnose).pack(anchor="w")
         ttk.Label(frame, text="Текст из буфера отправляется в онлайн-сервис Microsoft.\nПеред каждым новым текстом нажимайте Ctrl+C.", wraplength=450).pack(anchor="w", pady=8)

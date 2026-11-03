@@ -33,14 +33,14 @@ class WindowsClipboardTests(unittest.TestCase):
             cb.EmptyClipboard()
             cb.CloseClipboard()
 
-    def test_hotkey_routes_copied_text_to_speaker(self):
+    def test_registered_hotkey_callback_routes_clipboard_to_speaker(self):
         import time
         import keyboard
         import win32clipboard as cb
         import win32con
         from unittest.mock import patch
         from edge_reader import App
-        with patch('edge_reader.Speaker') as speaker_class:
+        with patch('edge_reader.Speaker') as speaker_class, patch('edge_reader.keyboard.add_hotkey') as register:
             app = App()
             app.root.withdraw()
             cb.OpenClipboard()
@@ -51,13 +51,8 @@ class WindowsClipboardTests(unittest.TestCase):
                 cb.CloseClipboard()
             result = []
             def trigger():
-                # Inject as an external input source: keyboard.send deliberately
-                # suppresses this library's own replayed events.
-                import ctypes
-                for key in (0x11, 0x12, 0x58):
-                    ctypes.windll.user32.keybd_event(key, 0, 0, 0)
-                for key in (0x58, 0x12, 0x11):
-                    ctypes.windll.user32.keybd_event(key, 0, 2, 0)
+                callbacks = {call.args[0]: call.args[1] for call in register.call_args_list}
+                callbacks['ctrl+alt+x']()
                 app.root.after(100, check)
             deadline = time.monotonic() + 8
             def check():
