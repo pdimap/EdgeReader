@@ -1,12 +1,12 @@
 [Setup]
 AppId=EdgeReader
 AppName=EdgeReader
-AppVersion=2.0.1
+AppVersion=2.0.2
 DefaultDirName={localappdata}\Programs\EdgeReader
 DefaultGroupName=EdgeReader
 PrivilegesRequired=lowest
 OutputDir=dist
-OutputBaseFilename=EdgeReader-2.0.1-Setup
+OutputBaseFilename=EdgeReader-2.0.2-Setup
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
