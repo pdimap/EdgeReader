@@ -16,9 +16,9 @@ class WindowsClipboardTests(unittest.TestCase):
             cb.EmptyClipboard()
             cb.SetClipboardData(win32con.CF_UNICODETEXT, text)
             cb.SetClipboardData(html_id, rich)
-            before = cb.GetClipboardSequenceNumber()
         finally:
             cb.CloseClipboard()
+        before = cb.GetClipboardSequenceNumber()
         try:
             self.assertEqual(copied_text(), text)
             cb.OpenClipboard()
@@ -51,7 +51,13 @@ class WindowsClipboardTests(unittest.TestCase):
                 cb.CloseClipboard()
             result = []
             def trigger():
-                keyboard.send('ctrl+alt+x')
+                # Inject as an external input source: keyboard.send deliberately
+                # suppresses this library's own replayed events.
+                import ctypes
+                for key in (0x11, 0x12, 0x58):
+                    ctypes.windll.user32.keybd_event(key, 0, 0, 0)
+                for key in (0x58, 0x12, 0x11):
+                    ctypes.windll.user32.keybd_event(key, 0, 2, 0)
                 app.root.after(100, check)
             deadline = time.monotonic() + 8
             def check():
