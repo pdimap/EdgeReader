@@ -1,100 +1,128 @@
-"""Read focused text selection; fall back to simulated copy when enabled."""
-import time
+"""Current selection only. Clipboard fallback refuses formats it cannot preserve."""
 import ctypes
-
+import time
+import threading
 import keyboard
-import pyperclip
 import pythoncom
 import uiautomation as auto
-import win32clipboard
+import win32clipboard as cb
 import win32con
 
+_copy_lock = threading.Lock()
 
-def from_uia():
-    # UI Automation uses COM. Every Python worker thread using it MUST
-    # initialize and uninitialize COM on that same thread.
+
+def foreground():
+    user32 = ctypes.windll.user32
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    return user32.GetForegroundWindow()
+
+
+def check_target(target):
+    if target is not None and foreground() != target:
+        raise RuntimeError("FOCUS_CHANGED: активное окно изменилось; выделите текст и повторите")
+
+
+def from_uia(target=None):
     pythoncom.CoInitialize()
     try:
-        control = auto.GetFocusedControl()
-        if not control:
-            return ""
-        current = control
-        for _ in range(4):
+        check_target(target)
+        current = auto.GetFocusedControl()
+        for _ in range(6):
             if not current:
                 break
+            if getattr(current, "IsPassword", False) is True:
+                raise RuntimeError("PASSWORD: защищённое поле не читается")
             try:
                 pattern = current.GetTextPattern()
                 if pattern:
-                    selection = pattern.GetSelection()
-                    parts = [item.GetText(-1) for item in selection]
-                    result = "\n".join(part for part in parts if part).strip()
-                    if result:
-                        return result
+                    text = "\n".join(r.GetText(-1) for r in pattern.GetSelection()).strip()
+                    check_target(target)
+                    if text:
+                        return text
+            except RuntimeError:
+                raise
             except Exception:
                 pass
-            try:
-                current = current.GetParentControl()
-            except Exception:
-                break
+            current = current.GetParentControl()
         return ""
     finally:
         pythoncom.CoUninitialize()
 
 
-def from_clipboard_fallback():
-    """Use only when explicitly enabled. Preserves plain text, not all rich formats."""
-    # Never overwrite non-text clipboard contents (pictures, files, etc.).
-    win32clipboard.OpenClipboard()
-    try:
-        formats = []
-        fmt = 0
-        try:
-            while True:
-                fmt = win32clipboard.EnumClipboardFormats(fmt)
-                if not fmt:
-                    break
-                formats.append(fmt)
-        except Exception:
-            # The empty clipboard has no formats on some Windows builds.
-            if formats:
-                raise
-    finally:
-        win32clipboard.CloseClipboard()
-    supported_formats = {win32con.CF_TEXT, win32con.CF_UNICODETEXT,
-                         win32con.CF_OEMTEXT, win32con.CF_LOCALE}
-    if formats and (win32con.CF_UNICODETEXT not in formats or
-                    any(fmt not in supported_formats for fmt in formats)):
-        raise RuntimeError("В буфере есть изображение или форматированные данные. Сначала скопируйте обычный текст либо используйте прямой режим.")
+def _formats():
+    formats, fmt = [], 0
+    while True:
+        fmt = cb.EnumClipboardFormats(fmt)
+        if not fmt:
+            return formats
+        formats.append(fmt)
 
-    old_text = pyperclip.paste()
-    # Clear first so an unsupported Ctrl+C cannot return stale content.
-    # The hotkey's Ctrl/Alt keys may still be down when callback fires.
-    for _ in range(25):
-        if not keyboard.is_pressed("alt") and not keyboard.is_pressed("ctrl"):
-            break
-        time.sleep(0.02)
-    else:
-        raise RuntimeError("Отпустите Ctrl и Alt и попробуйте снова")
-    pyperclip.copy("")
-    cleared_seq = ctypes.windll.user32.GetClipboardSequenceNumber()
-    keyboard.send("ctrl+c")
-    data = ""
-    try:
-        for _ in range(20):
-            time.sleep(0.05)
-            if ctypes.windll.user32.GetClipboardSequenceNumber() != cleared_seq:
-                data = pyperclip.paste()
+
+def from_clipboard_fallback(target=None):
+    # Conservative policy: never touch rich, delayed, image or private formats.
+    # All supported bytes are snapshotted while holding the clipboard lock.
+    with _copy_lock:
+        for _ in range(100):
+            if not any(keyboard.is_pressed(k) for k in ("ctrl", "alt", "shift", "windows")):
                 break
-    finally:
-        # Restore only if no other clipboard write happened meanwhile.
-        seq = ctypes.windll.user32.GetClipboardSequenceNumber()
-        if seq == cleared_seq or pyperclip.paste() == data:
-            pyperclip.copy(old_text)
-    return data
+            time.sleep(.02)
+        else:
+            raise RuntimeError("MODIFIERS_HELD: отпустите клавиши и повторите")
+        check_target(target)
+        seq = ctypes.windll.user32.GetClipboardSequenceNumber
+        cb.OpenClipboard()
+        try:
+            formats = _formats()
+            safe = {win32con.CF_TEXT, win32con.CF_UNICODETEXT, win32con.CF_OEMTEXT, win32con.CF_LOCALE}
+            if any(f not in safe for f in formats):
+                raise RuntimeError("CLIPBOARD_PROTECTED: буфер содержит сложные данные; они сохранены. Прямое чтение недоступно")
+            saved = [(f, cb.GetClipboardData(f)) for f in formats]
+            before = seq()
+        finally:
+            cb.CloseClipboard()
+        check_target(target)
+        keyboard.send("ctrl+c")
+        copied_seq = None
+        try:
+            for _ in range(30):
+                time.sleep(.05)
+                check_target(target)
+                if seq() != before:
+                    cb.OpenClipboard()
+                    try:
+                        # Clipboard owner must belong to the target application.
+                        owner = cb.GetClipboardOwner()
+                        user32 = ctypes.windll.user32
+                        owner_pid, target_pid = ctypes.c_ulong(), ctypes.c_ulong()
+                        user32.GetWindowThreadProcessId(ctypes.c_void_p(owner), ctypes.byref(owner_pid))
+                        user32.GetWindowThreadProcessId(ctypes.c_void_p(target or foreground()), ctypes.byref(target_pid))
+                        if not owner or owner_pid.value != target_pid.value:
+                            raise RuntimeError("CLIPBOARD_CHANGED: буфер изменён другим приложением; чтение отменено")
+                        copied_seq = seq()
+                        return cb.GetClipboardData(win32con.CF_UNICODETEXT).strip() if cb.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT) else ""
+                    finally:
+                        cb.CloseClipboard()
+            return ""
+        finally:
+            if copied_seq is not None:
+                cb.OpenClipboard()
+                try:
+                    if seq() == copied_seq:
+                        cb.EmptyClipboard()
+                        for fmt, data in saved:
+                            cb.SetClipboardData(fmt, data)
+                finally:
+                    cb.CloseClipboard()
 
 
-def selected_text(allow_fallback=True):
-    text = from_uia()
+def selected_text(allow_fallback=True, target=None):
+    check_target(target)
+    try:
+        text = from_uia(target) if target is not None else from_uia()
+    except RuntimeError:
+        raise
+    except Exception:
+        text = ""
     if text or not allow_fallback:
         return text
-    return from_clipboard_fallback()
+    return from_clipboard_fallback(target) if target is not None else from_clipboard_fallback()

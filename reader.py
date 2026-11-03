@@ -53,6 +53,7 @@ class Speaker:
         self._worker = None
         self._lock = threading.Lock()
         self._generation = 0
+        self._playback_lock = threading.Lock()
 
     def speak(self, text: str, voice: str, speed: float):
         with self._lock:
@@ -98,7 +99,21 @@ class Speaker:
                             buffer.extend(packet["data"])
                     return bytes(buffer)
 
-                mp3 = asyncio.run(receive())
+                async def cancellable_receive():
+                    task = asyncio.create_task(receive())
+                    try:
+                        for _ in range(600):
+                            if stop_event.is_set():
+                                return b""
+                            done, _ = await asyncio.wait({task}, timeout=.1)
+                            if done:
+                                return task.result()
+                        raise TimeoutError("Сервис TTS не ответил за 60 секунд; проверьте интернет")
+                    finally:
+                        if not task.done():
+                            task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                mp3 = asyncio.run(cancellable_receive())
                 if stop_event.is_set():
                     return
                 if not mp3:
@@ -107,8 +122,10 @@ class Speaker:
                 samples = np.frombuffer(decoded.samples, dtype=np.int16)
                 if decoded.nchannels > 1:
                     samples = samples.reshape(-1, decoded.nchannels)
-                self.status("Читаю…")
-                with sd.OutputStream(samplerate=decoded.sample_rate, channels=decoded.nchannels, dtype="int16") as stream:
+                if stop_event.is_set():
+                    return
+                self.status("Получен звук. Воспроизведение…")
+                with self._playback_lock, sd.OutputStream(samplerate=decoded.sample_rate, channels=decoded.nchannels, dtype="int16") as stream:
                     for offset in range(0, len(samples), 1024):
                         if stop_event.is_set():
                             return
@@ -120,5 +137,5 @@ class Speaker:
             if not stop_event.is_set() and generation == self._generation:
                 self.status("Готово")
         except Exception as exc:
-            if not stop_event.is_set():
-                self.status(f"Ошибка озвучивания: {exc}")
+            if not stop_event.is_set() and generation == self._generation:
+                self.status(f"Ошибка озвучивания ({type(exc).__name__}). Проверьте интернет и аудиоустройство.")
