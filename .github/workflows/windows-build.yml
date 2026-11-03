@@ -2,7 +2,8 @@ name: Build and test EdgeReader on Windows
 
 on:
   push:
-    branches: [main]
+    branches: [main, "fix/**"]
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -35,9 +36,29 @@ jobs:
           Start-Sleep -Seconds 8
           if ($process.HasExited) { throw "EdgeReader exited unexpectedly: $($process.ExitCode)" }
           Stop-Process -Id $process.Id -Force
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Installer build failed" }
+          Get-FileHash dist/EdgeReader-2.0.2-Setup.exe -Algorithm SHA256 | Format-List | Out-File dist/SHA256.txt
+      - name: Test install and uninstall
+        shell: pwsh
+        run: |
+          $setup = Start-Process dist/EdgeReader-2.0.2-Setup.exe -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "Installation failed" }
+          $dir = "$env:LOCALAPPDATA\Programs\EdgeReader"
+          $app = Start-Process "$dir\EdgeReader.exe" -PassThru
+          Start-Sleep -Seconds 5
+          if ($app.HasExited) { throw "Installed app exited" }
+          Stop-Process -Id $app.Id -Force
+          $remove = Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
+          if ($remove.ExitCode -ne 0) { throw "Uninstall failed" }
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
           name: EdgeReader-2.0-Windows-Beta
-          path: dist/EdgeReader-2.0.exe
+          path: |
+            dist/EdgeReader-2.0.2-Setup.exe
+            dist/SHA256.txt
           if-no-files-found: error
